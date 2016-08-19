@@ -8,10 +8,12 @@ package wxy.Utils;
 public class PageInfo {
     String sUrl;
     String sHtml;
+    int contentLen;
 
-    public PageInfo(String sUrl, String sHtml) {
+    public PageInfo(String sUrl, String sHtml,int len) {
         this.sUrl = sUrl;
         this.sHtml = sHtml;
+        this.contentLen = len;
     }
 
     public String getsUrl() {
@@ -28,5 +30,13 @@ public class PageInfo {
 
     public void setsHtml(String sHtml) {
         this.sHtml = sHtml;
+    }
+
+    public int getContentLen() {
+        return contentLen;
+    }
+
+    public void setContentLen(int contentLen) {
+        this.contentLen = contentLen;
     }
 }

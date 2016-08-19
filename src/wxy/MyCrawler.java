@@ -1,21 +1,18 @@
 package wxy;
 
-import wxy.Utils.MyBloomFilter;
+import wxy.Utils.CBloomFilter;
 import wxy.Utils.PageInfo;
+import wxy.Utils.UrlInfo;
 
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
+import java.net.ProtocolException;
 import java.net.URL;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.zip.GZIPInputStream;
 
 /**
  * @author delia
@@ -23,292 +20,476 @@ import java.util.zip.GZIPInputStream;
  */
 
 public class MyCrawler {
-    private String sUrl = null;
-    private int maxNum = 1;
-    public static MyBloomFilter mb = new MyBloomFilter();
-    public static BlockingQueue<String> urlist = new LinkedBlockingQueue<String>();
-    public static volatile long crawledNum = 0;
-    public static BlockingQueue<PageInfo> pagesList = new LinkedBlockingQueue<PageInfo>();
-    public static long resIndex = 1;
-    private FileWriter writerResult = null;
-    private BufferedWriter bwResult = null;
+    private String initUrl = null;
+    private int MAX_NUM = 1;
+    public static CBloomFilter mb = new CBloomFilter();
+    public static BlockingQueue<UrlInfo> urlist;
+    private static AtomicInteger crawlNum = new AtomicInteger(0);
+    private static AtomicInteger errorNum = new AtomicInteger(0);
+    private FileWriter fileWriter = null;
+    private BufferedWriter bufferedWriter = null;
     private String filePath = null;
-    private long startTime = 0,endTime = 0;
-    ExecutorService cachedTPool_GetPage;
-    ExecutorService cachedTPool_ParsePage;
-    public MyCrawler(String sUrl, int maxNum,String filePath) {
-        this.sUrl = sUrl;
-        this.maxNum = maxNum;
-        this.filePath = filePath;
-        //int a = Integer.MAX_VALUE;
+    public long startTime = 0;
+    private long endTime = 0;
+    private static ExecutorService cachedPool;
+    private long getInputStreamTime = 0;
+    private long getPageTime = 0;
+    private long parsePageTime = 0;
+    private long EndTime = 0;
 
+
+    public MyCrawler(String sUrl, int maxNUm, String filePath) {
+        this.initUrl = sUrl;
+        this.MAX_NUM = maxNUm;
+        this.filePath = filePath;
+        urlist = new LinkedBlockingQueue<UrlInfo>(MAX_NUM*500);/*---------------------大小待商榷------------------------*/
     }
 
     public static void main(String[] args) {
-        if (args.length != 3){
-            System.out.println("请输入参数 url,maxNumOfUrl,fileName");//http://www.cnblogs.com/yzl-i/p/4442892.html
-            return;
-        }
-        String sUrl = args[0];
-        int maxNum = Integer.parseInt(args[1]);
-        String fileName = args[2];
-        String filetPath = "//Users/delia/Desktop/test/"+args[2];//urlResult.txt
-        //MyCrawler mc = new MyCrawler(sUrl,maxNum);
-        MyCrawler mc = new MyCrawler("http://www.baidu.com",maxNum,filetPath);
-        mc.startTime=System.currentTimeMillis();
-        mc.crawler();
+        String filePath = "/Users/delia/Documents/workspace/Crawler/out/urlResult.txt";//urlResult.txt
+        int MAX_NUM = 1;
+        //MyCrawler mc = new MyCrawler("http://weibo.com/BaiduTVgame",MAX_NUM,filePath);//http://rj.baidu.com/
+        MyCrawler mc = new MyCrawler("http://tieba.baidu.com/f?kw=&fr=wwwt",MAX_NUM,filePath);//http://rj.baidu.com/
+        // MyCrawler mc = new MyCrawler("http://tieba.baidu.com/f?kw=&fr=wwwt",MAX_NUM,filePath);
+        // http://music.baidu.com/song/242078437?infrom=dayhot&amp;uid=40C0332B-0B7D-3919-AC90-FF8A038822D7 连接超时
+        // http://ivr.baidu.com/other/s57b426b34b33.html
+        // http://music.baidu.com/song/242078465?infrom=dayhot&amp;uid=3D5AB83A-C703-F265-7600-E4FFF634DB93
+        //读超时 <验证:UnknownHostException: v.hao123.com http,连接错误>http://v.hao123.com http://sy.hao123.com/qy/7993
+        // 解析出0个url<验证:UnknownHostException: test.baidu.com http> http://test.baidu.com http://cbbs.baidu.com http://news.baidu.com/ns?cl=2&rn=20&tn=news&word=
+        // 耗光内存 http://music.baidu.com/?uid=6DBDB269-FA83-0DAD-653E-B47F209FB1EB
+        mc.startTime = System.currentTimeMillis();
+        mc.crawl();
     }
+
+
 
     //爬取方法
-    public void crawler(){
+    public void crawl() {
+        if (initUrl == null || initUrl.equals("") || initUrl.length() == 0) {
+            System.out.println("入口url不能为空,请重新输入!");
+        }
         try {
-            this.writerResult = new FileWriter(filePath);
+            this.fileWriter = new FileWriter(filePath);
         } catch (IOException e) {
+            System.out.println("打开文件错误,请检查路径后重启程序!");
+            e.printStackTrace();
+            System.exit(1);
+        }
+        this.bufferedWriter = new BufferedWriter(fileWriter);
+        //cachedPool = Executors.newCachedThreadPool();
+        cachedPool = Executors.newFixedThreadPool(20);
+        UrlInfo urlInfo = new UrlInfo(initUrl,initUrl);
+        int addRes = AddCrawlList(initUrl, urlInfo);
+        if (1 != addRes){
+            System.out.println(Thread.currentThread().getName()+" AddCrawlList 出错,errorCode="+addRes);
+            return;
+        }
+
+        int num = 0;
+        for (; num < MAX_NUM; num++) {
+            try {
+                //System.out.println(Thread.currentThread().getName() + " urlist.size="+urlist.size()+" 提取url...");
+                UrlInfo u = urlist.poll(100,TimeUnit.SECONDS); // 此处导致线程无法终止,url个数不足,阻塞
+                if (u == null){
+                    System.out.println("获取url超过100s,终止程序!");
+                    endProgram(num);
+                    System.exit(1);
+                }
+                cachedPool.execute(new TaskCrawlPages(u));
+                TimeUnit.MILLISECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                System.out.println("main:获取url的阻塞被打断了!");
+                e.printStackTrace();
+                break;
+            }
+        }
+        cachedPool.shutdown();
+        try{
+            cachedPool.awaitTermination(1,TimeUnit.DAYS);
+        }catch(InterruptedException e){
+            System.out.println("执行超时退出!");
+            e.printStackTrace();
+            System.exit(1);
+        }
+        endProgram(num);
+    }
+
+    public void endProgram(int num){
+        try {
+            bufferedWriter.close();
+            fileWriter.close();
+        } catch (IOException e) {
+            System.out.println(Thread.currentThread().getName()+" bufferedWriter,fileWriter 关闭出错!");
             e.printStackTrace();
         }
-        this.bwResult = new BufferedWriter(writerResult);
-        AddCrawlist(sUrl,null);
-
-        //Thread tGetPages = new Thread(new ThreadGetPages());//抓取网页线程
-        //tGetPages.start();
-        //Thread tParsePages = new Thread(new ThreadParsePages());//解析网页内容线程
-        //tParsePages.start();
-
-        startThreadPool();
+        endTime = System.currentTimeMillis();
+        System.out.println("num="+num);
+        System.out.println("已爬取 " + crawlNum.get() + " 个,程序终止,执行时间:" + (endTime - startTime) / 1000.0 + "s"+
+                " 最长connect时间= "+getInputStreamTime+" 最长读取网页时间= "+getPageTime+" 最长网页解析时间= "+parsePageTime+" 最长执行时间= "+EndTime+" errorNum = "+errorNum.get());
     }
-    public void startThreadPool(){
-        try {
-            cachedTPool_GetPage = Executors.newCachedThreadPool();
-            cachedTPool_ParsePage = Executors.newCachedThreadPool();
-            for (int i = 0; i < 30; i++) {
-                cachedTPool_GetPage.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        while (true) {
-                            //System.out.println("====爬取线程:当前爬取的URL为:" + sUrl);
-                            crawlPage();//抓取网页
-                        }
-                    }
-                });
-                cachedTPool_ParsePage.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        while (true) {
-                            //System.out.println("====分析网页线程==============");
-                            analyzePage();//分析网页,提取url
-                        }
-                    }
-                });
+
+
+
+
+
+
+    //crawlPage__________________________________________________________________________________________________________
+
+    public void crawlPage(UrlInfo urlInfo) {
+        //------------------------------------------------开始线程-------------------------------------
+
+        long cStartTime = System.currentTimeMillis();
+        String sUrl = urlInfo.getsUrl();
+        synchronized (crawlNum) {
+            crawlNum.addAndGet(1);
+            System.out.println(Thread.currentThread().getName()+" 开始:爬取第"+crawlNum.get()+"个,获取URL对象..."+"url= "+sUrl);
+            try {
+                bufferedWriter.write(crawlNum.get() + "    " + Thread.currentThread().getName() + "    " + sUrl + "\n");
+            } catch (IOException e) {
+                System.out.println(Thread.currentThread().getName()+" 写文件错误,return!");
+                e.printStackTrace();
+                return;
             }
 
-            //cachedTPool_ParsePage.execute(new Runnable() {
-            //    @Override
-            //    public void run() {
-            //        while (true) {
-            //            //System.out.println("====分析网页线程==============");
-            //            analyzePage();//分析网页,提取url
-            //        }
-            //    }
-            //});
+        }
 
+        if (sUrl == null || sUrl.length() == 0 ||sUrl.equals("")){
+            System.out.println(Thread.currentThread().getName()+" url == 0,return!");
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            return;
+        }
+        URL url = null;// MalformedURLException
+        try {
+            url = new URL(sUrl);
+        } catch (MalformedURLException e) {
+            System.out.println(Thread.currentThread().getName()+" URL(sUrl) - MalformedURLException,return!");
+            e.printStackTrace();
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            return;
+        }
+        //System.out.println(Thread.currentThread().getName()+" 开始:获取HttpURLConnection对象...");
+        //建立连接
+        HttpURLConnection connection = null;//IOException
+        try {
+            connection = (HttpURLConnection) url.openConnection();
+        } catch (IOException e) {
+            System.out.println(Thread.currentThread().getName()+" 161,url.openConnection() - IOException,return!");
+            e.printStackTrace();
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            return;
+        }
+        //System.out.println(Thread.currentThread().getName()+" 成功:获取到HttpURLConnection对象...");
+        //System.out.println(Thread.currentThread().getName()+" 开始:设置POST方式...");
+        try {
+            connection.setRequestMethod("POST");// ProtocolException
+        } catch (ProtocolException e) {
+            System.out.println(Thread.currentThread().getName()+" 160,setRequestMethod(\"POST\") -  ProtocolException,return!");
+            e.printStackTrace();
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            return;
+        }
+        //System.out.println(Thread.currentThread().getName()+" 成功:设置POST方式成功...");
 
-            //int index = 1;
-            //while(true) {
-            //    urlist.put(String.valueOf(index++));
-            //    System.out.println("index = "+index+" add,size=" + urlist.size());
-            //    if (index % 2 == 0){
-            //        urlist.take();
-            //        System.out.println("index = "+index+" take, size=" + urlist.size());
+        connection.setDoOutput(true);
+        connection.setDoInput(true);// 设置是否从httpUrlConnection读入，默认情况下是true;
+        connection.setUseCaches(false);// Post 请求不能使用缓存
+        connection.setRequestProperty("Accept-Encoding", "identity");//告诉服务器你的浏览器支持gzip解压 gzip,deflate
+        connection.setRequestProperty("Connection", "Keep-Alive");
+        connection.setRequestProperty("Content-Length","0");
+        connection.setConnectTimeout(2*1000);
+        connection.setReadTimeout(6*10*1000);
+
+        long tcStart = System.currentTimeMillis();
+        long tcEnd = 0;
+        try {
+            connection.connect();
+            //int iState = connection.getResponseCode();
+            //if (200 != iState) {
+            //    synchronized (errorNum) {
+            //        errorNum.addAndGet(1);
             //    }
+            //    System.out.println(Thread.currentThread().getName()+" --------------------------------[-url] 响应码:"+iState+",return!");
+            //    return;//只存储200 OK成功响应,其他无视
             //}
-        }catch (Exception e){
+        } catch (IOException e) {
+            tcEnd = System.currentTimeMillis();
+            System.out.println(Thread.currentThread().getName()+"connectException,耗时: "+(tcEnd-tcStart));
             e.printStackTrace();
-        }
-
-    }
-    /**
-     * 抓取页面线程
-     *
-     * @author delia
-     * @create 2016-06-28 下午8:27
-     */
-    class ThreadGetPages implements Runnable {
-
-        @Override
-        public void run() {
-            while (true) {
-                    //String sUrl = GetUrlFromCrawlList();
-                    //System.out.println("爬取线程:当前爬取的URL为:" + sUrl);
-                    crawlPage();//抓取网页
-                try {
-                    TimeUnit.MILLISECONDS.sleep(100);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
             }
+            return;
         }
-    }
-
-    class ThreadParsePages implements Runnable {
-        @Override
-        public void run() {
-            while (true) {
-                    //PageInfo pageInfo = GetPagesFromPagesList();
-                    //System.out.println("分析线程:当前分析的URL为:"+pageInfo.getsUrl());
-                    analyzePage();//分析网页,提取url
-
-                try {
-                    TimeUnit.MILLISECONDS.sleep(100);
-                }catch (Exception e){
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
+        tcEnd = System.currentTimeMillis();
+        long tConn = tcEnd - tcStart;
+        getInputStreamTime = tConn > getInputStreamTime?tConn:getInputStreamTime;
+        System.out.println(Thread.currentThread().getName()+" 成功:完成connect 耗时: "+(tcEnd-tcStart));
 
 
-    public void crawlPage(){
-        String sUrl = null;
+
+//System.out.println(Thread.currentThread().getName()+" 开始:获取响应码...");
+
+        long tSStart = System.currentTimeMillis();
+        long tSEnd = 0;
+        int iState = 0;
         try {
-            //System.out.println("==================new page========================");
-            sUrl = urlist.take();
-            //System.out.println("url-,size="+urlist.size());
-            //crawledNum ++;
-            URL url=new URL(sUrl);
-            //建立连接
-            HttpURLConnection connection =(HttpURLConnection)url.openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);//设置是否向httpUrlConnection输出，post请求,参数要放在http正文内要设true, 默认情况下是false;
-            connection.setDoInput(true);// 设置是否从httpUrlConnection读入，默认情况下是true;
-            connection.setUseCaches(false);// Post 请求不能使用缓存
-            connection.setRequestProperty("Accept-Encoding", "identity");//告诉服务器你的浏览器支持gzip解压 gzip,deflate
-            connection.setRequestProperty("Connection", "Keep-Alive");
-            connection.setRequestProperty("Content-type", "application/x-java-serialized-object");// 设定传送的内容类型是可序列化的java对象(如果不设此项,在传送序列化对象时,当WEB服务默认的不是这种类型时可能抛java.io.EOFException)
-            //connecion.connect();//根据HttpURLConnectiony对象的配置值生成http头部信息
-            OutputStream outStrm = connection.getOutputStream();
-            ObjectOutputStream objOutputStrm = new ObjectOutputStream(outStrm);
-            objOutputStrm.writeObject(new String(""));
-            objOutputStrm.flush();
-            objOutputStrm.close();
-
-            int iState = connection.getResponseCode();
-            if (iState != 200) {
-                //System.out.println("状态码: [" + iState + "],url为:" + sUrl);
-                return;//只存储200 OK成功响应,其他无视
-            }
-            bwResult.write(String.valueOf(resIndex++)+"    "+sUrl+"   "+connection.getContentLength()+" B\n");
-            BufferedReader reader;
-            //String charSet = getCharset(connection.getContentType());
-            //System.out.println("内容编码:"+charSet);
-            InputStream in = connection.getInputStream();
-            String sContentEncoding = connection.getContentEncoding();
-            if (sContentEncoding != null && sContentEncoding.length() != 0 && sContentEncoding.equals("gzip")){
-                GZIPInputStream gzin = new GZIPInputStream(in);
-                reader = new BufferedReader(new InputStreamReader(gzin));
-            }
-            else {
-                //reader = new BufferedReader(new InputStreamReader(in, charSet));
-                reader = new BufferedReader(new InputStreamReader(in));
-            }
-            String line;
-            StringBuffer sHtml = new StringBuffer();// Read page into buffer.
-            while ((line = reader.readLine()) != null) {
-                sHtml.append(line+"\n");
-            }
-            reader.close();
-            //System.out.println(sHtml.toString());
-                if(sHtml != null && sHtml.length() != 0) {
-                    pagesList.put(new PageInfo(sUrl, sHtml.toString()));
-                    //System.out.println("page+,size="+pagesList.size());
-                }
-        } catch (Exception e) {
-            System.out.println("出错url========"+sUrl);
+            iState = connection.getResponseCode();
+        } catch (IOException e) {
             e.printStackTrace();
             return;
         }
+        if (200 != iState) {
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            System.out.println(Thread.currentThread().getName()+" --------------------------------[-url] 响应码:"+iState+",return!");
+            return;//只存储200 OK成功响应,其他无视
+        }
+        tSEnd = System.currentTimeMillis();
+        long tState = tSEnd - tSStart;
+        getInputStreamTime = tState > getInputStreamTime?tState:getInputStreamTime;
+        System.out.println(Thread.currentThread().getName()+" 成功:完成getResponseCode 耗时: "+tState);
+
+
+
+
+
+        //------------------------------------------------开始获取getInputStream()-------------------------------------
+
+        long t1 = System.currentTimeMillis();
+        long t2 = 0;
+        InputStream in = null;//发送http请求,返回输入流,读取服务器返回信息
+        //System.out.println(Thread.currentThread().getName()+" 开始:获取getInputStream()...");
+        try {
+            in = connection.getInputStream();
+        } catch (IOException e) {
+            e.printStackTrace();
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+
+            return;
+        }
+        t2=System.currentTimeMillis();
+        System.out.println(Thread.currentThread().getName()+" 成功:获取getInputStream(),耗时: "+(t2-t1));
+
+
+
+
+
+
+
+
+
+
+        /*
+        * 此处应有编码解码
+        * */
+        BufferedReader reader;
+        reader = new BufferedReader(new InputStreamReader(in));
+        String line;
+        StringBuffer sHtml = new StringBuffer();// Read page into buffer.
+
+        //------------------------------------------------开始读sHtml-------------------------------------------
+
+        int lineNum = 0;
+        System.out.println(Thread.currentThread().getName()+" 开始:读取网页...");
+        long tReadStart = System.currentTimeMillis();
+        try {
+            while ((line = reader.readLine()) != null ) {// SocketTimeoutException
+                sHtml.append(line + "\n");
+            }
+        } catch (IOException e) {
+            //System.out.println(Thread.currentThread().getName()+" 217,readLine()() - IOException,return!");
+            e.printStackTrace();
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            return;
+        }
+        long tReadEnd = System.currentTimeMillis();
+        long t_Read = tReadEnd-tReadStart;
+        //System.out.println(Thread.currentThread().getName()+" 成功:读取网页,耗时 "+t_Read);
+        getPageTime = (t_Read > getPageTime) ? t_Read : getPageTime;
+
+        try {
+            reader.close();
+            in.close();
+        } catch (IOException e) {
+            //System.out.println(Thread.currentThread().getName()+" 225,reader&in.close()() - IOException,return!");
+            e.printStackTrace();
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            return;
+        }
+
+        //------------------------------------------------读完sHtml-------------------------------------------
+
+
+        if (sHtml.length() != 0) {
+            long cPageTime = System.currentTimeMillis();
+            int len = connection.getContentLength();
+            parsePage(new PageInfo(sUrl, sHtml.toString(), len));
+            long cPageEndTime = System.currentTimeMillis();
+            long parseTime = cPageEndTime-cPageTime;
+            parsePageTime = (parseTime > parsePageTime)?parseTime:parsePageTime;
+            //System.out.println(Thread.currentThread().getName()+" 解析网页耗时: "+parseTime);
+
+
+        }else{
+            synchronized (errorNum) {
+                errorNum.addAndGet(1);
+            }
+            System.out.println("-------------"+Thread.currentThread().getName()+" sHtml.length() = 0,url="+sUrl);
+            return;
+        }
+        long cEndTime = System.currentTimeMillis();
+        long singeLongTime = cEndTime - cStartTime;
+        EndTime = (singeLongTime > EndTime)?singeLongTime:EndTime;
+
+        //------------------------------------------------end-------------------------------------------
+
+        System.out.println(Thread.currentThread().getName()+" [End],time= "+(cEndTime-cStartTime)+" urlist.size="+urlist.size());
     }
 
-    public void analyzePage(){
-        //System.out.println("crawledNum:::"+crawledNum);
-        if (crawledNum >= maxNum) {
-            endTime = System.currentTimeMillis();
-            System.out.println("已爬取 " + crawledNum + " 个,程序终止,执行时间:" + (endTime - startTime) + "ms");
-            try {
-                bwResult.close();
-                writerResult.close();
-                cachedTPool_GetPage.shutdownNow();
-                cachedTPool_ParsePage.shutdownNow();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }finally {
-                System.exit(0);
-            }
-        }
-        int iSum = 0, invalidNum = 0;
-        try {
-            //System.out.println("==================new url========================");
-            PageInfo pageInfo = pagesList.take();
-            //System.out.println("***********************page-,size="+pagesList.size());
-            String sHtml = pageInfo.getsHtml();
-            String sCrawlUrl = pageInfo.getsUrl();
-            crawledNum ++;
-            //System.out.println("当前分析第 "+crawledNum+" 个,Url为:"+sCrawlUrl);
 
-            String regex = "<a.*?/a>";//任意字符任意次,尽可能少的匹配
+
+
+
+
+
+
+
+
+
+    public int AddCrawlList(String absolutePath, UrlInfo urlInfo){
+        /*
+        * 1 正常返回
+        * -1 put url 超时
+        * -2 urlInfo == null
+        * -3 url put interrupted
+        * -4 sUrl = null
+        * -5 mb过滤错误,已存在url
+        * */
+        if (urlInfo == null) return -2;
+        String sUrl = checkUrl(absolutePath, urlInfo.getsUrl());
+        if (sUrl != null) {
+            synchronized (mb) {
+                if (mb.add(sUrl)) {//bloom过滤器去重复url
+                    try {
+                        boolean isPut = urlist.offer(urlInfo, 1, TimeUnit.SECONDS);
+                        if (!isPut) {
+                            return -1;
+                        }
+                        return 1;
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                        return -3;
+                    }
+
+                } else {
+                    return -5;
+                }
+            }
+        }else{
+            System.out.println(Thread.currentThread().getName()+" url == null!");
+            return -4;
+        }
+        //if (true){
+        //    return 1;
+        //}else {
+        //    return 2;
+        //}
+
+    }
+    // 抓取页面线程
+    class TaskCrawlPages implements Runnable {
+        private UrlInfo urlInfo = null;
+
+        public TaskCrawlPages(UrlInfo urlInfo) {
+            this.urlInfo = urlInfo;
+        }
+
+        @Override
+        public void run() {
+            crawlPage(urlInfo);//抓取网页
+        }
+    }
+
+
+    public void parsePage(PageInfo pageInfo){
+        String sHtml = null;
+        String sCrawlUrl = null;
+        int urlNum = 0;
+        try {
+            sHtml = pageInfo.getsHtml();
+            sCrawlUrl = pageInfo.getsUrl();
+            String regex = "<a.*?/a>";//任意字符任意次,尽可能少的匹配 .*表示任意字符,?表示懒惰匹配
             Pattern pt = Pattern.compile(regex);
             Matcher mt = pt.matcher(sHtml);
+            boolean isPut = false;
+            loop:
             while (mt.find()) {
-                //System.out.println(mt.group());
-                Matcher title = Pattern.compile(">.*?</a>").matcher(mt.group());
-                //Matcher myurl= Pattern.compile("href=.*?>").matcher(mt.group());
                 Matcher myurl = Pattern.compile("href=[ ]*\".*?\"").matcher(mt.group());
                 while (myurl.find()) {
-                    iSum++;
-                    //System.out.println("截取:"+myurl.group());
-                    //System.out.println("网址:"+myurl.group().replaceAll("href=|>",""));
                     String sUrl = myurl.group().replaceAll("href=|>", "").trim();
-                    int len = sUrl.length();
-                    sUrl = sUrl.substring(1, len - 1).replaceAll("\\s*", "");
-                    ;
+                    int lenUrl = sUrl.length();
+                    sUrl = sUrl.substring(1, lenUrl - 1).replaceAll("\\s*", "");// \s表示空白
+                    String urlToCheck = null;
                     if (sUrl != null && sUrl.length() != 0) {
-                        if (checkUrl(sCrawlUrl, sUrl) == null) {
-                            invalidNum++;
+                        urlToCheck = sUrl;
+                        String urLast = checkUrl(sCrawlUrl, urlToCheck);
+                        if (urLast == null) {
+                        }else {
+                            //判断size
+                            UrlInfo urlInfo =  new UrlInfo(sCrawlUrl, urLast);
+                            int addCode = AddCrawlList(sCrawlUrl,urlInfo);
+                            if(1 != addCode){
+                                if (-1 ==addCode){
+                                    System.out.println(Thread.currentThread().getName()+" put url等待1s超时! urlist.size="+urlist.size()+",停止解析本网页!");
+                                    break loop;
+
+                                }
+                            }else{
+                                urlNum ++;
+                            }
                         }
-                        AddCrawlist(sCrawlUrl, sUrl);
                     }
                 }
             }
-        }catch (InterruptedException e){
-            e.printStackTrace();
+            //synchronized (crawlNum) {
+            //    System.out.println(Thread.currentThread().getName() + "    parse 爬取第" + crawlNum.get() + "个" +",获取url:"+urlNum+ "个, 当前爬取url为:" + sCrawlUrl);
+            //    int len = pageInfo.getContentLen();
+            //    try {
+            //        bufferedWriter.write(crawlNum.get() + "    " + Thread.currentThread().getName() + "    " + sCrawlUrl + "     " + len + "B\n");
+            //    } catch (IOException e) {
+            //        e.printStackTrace();
+            //        //System.exit(1);
+            //    }
+            //}
+
         }
-        //System.out.println("共有"+iSum+"个结果, "+invalidNum+" 个不合法");
-        //System.out.println("待爬取的队列为: "+urlist.size()+"个");
-        //System.out.println();
-    }
-    public boolean AddCrawlist(String absolutePath,String reletivePath){//DNS解析
-        String sUrl =  checkUrl(absolutePath,reletivePath);
-        if (sUrl != null){
-            if (!mb.exits(sUrl)){
-                mb.add(sUrl);
-                try {
-                    urlist.put(sUrl);
-                    //System.out.println("url+,size="+ urlist.size());
-                    return true;
-                }catch (InterruptedException e){
-                    e.printStackTrace();
-                }
-            }
+        catch (Exception e) {
+            //e.printStackTrace();
         }
-        return false;
     }
 
-    public String checkUrl(String absolutePath,String sUrl){
+    public String checkUrl(String absolutePath, String sUrl) {
         if (sUrl == null)
             return absolutePath;
-        if (sUrl.indexOf("javascript:") != -1 || sUrl.indexOf("<%=") != -1 ||sUrl.indexOf("'") == 0 || sUrl.length() <= ("https://".length()+1))
+        if (sUrl.contains("javascript:") || sUrl.contains("<%=") || sUrl.indexOf("'") == 0 || sUrl.length() <= ("https://".length() + 1))
             return null;
-        if (sUrl.indexOf("http://") == -1 && sUrl.indexOf("https://") == -1){
-            if(sUrl.indexOf("/") == 0 || sUrl.indexOf("../") == 0 || sUrl.indexOf("./") == 0){
+        if (!sUrl.contains("http://") && !sUrl.contains("https://")) {
+            if (sUrl.indexOf("/") == 0 || sUrl.indexOf("../") == 0 || sUrl.indexOf("./") == 0 || absolutePath.lastIndexOf("/") == (absolutePath.length() -1)) {
                 URL absoluteUrl, parseUrl;
                 try {
                     absoluteUrl = new URL(absolutePath);
@@ -316,69 +497,15 @@ public class MyCrawler {
                     return parseUrl.toString();
 
                 } catch (MalformedURLException e) {
-                    e.printStackTrace();
+                    //e.printStackTrace();
+                    return null;
                 }
-            }else{
-                return "http://"+sUrl;
             }
-        }
-        return sUrl;
-
-    }
-
-    public String GetUrlFromCrawlList(){//DNS解析
-        try {
-            String sUrl = urlist.take();
-            System.out.println("urlist.size:"+urlist.size()+".take");
-            return sUrl;
-
-        }catch (InterruptedException e){
-            e.printStackTrace();
-        }
-        return null;
-    }
-    public  PageInfo  GetPagesFromPagesList(){//网页内容解析
-        try {
-            PageInfo pageInfp = pagesList.take();
-            //System.out.println("pagesList remove");
-            return pageInfp;
-        }catch (InterruptedException e){
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    public void getHeader(HttpURLConnection connection){
-        System.out.println("内容大小:"+connection.getContentLength()/1024+" KB");
-        System.out.println("内容类型:"+connection.getContentType());
-        System.out.println("内容编码:" + connection.getContentEncoding());
-        System.out.println();
-        Map<String, List<String>> headerFields = connection.getHeaderFields();
-        Set<Entry<String, List<String>>> entrySet = headerFields.entrySet();
-        Iterator<Entry<String, List<String>>> iterator = entrySet.iterator();
-        while(iterator.hasNext()) {
-            Entry<String, List<String>> next = iterator.next();
-            String key=next.getKey();
-            List<String> value = next.getValue();
-            if(key==null)
-                System.out.println(value.toString());
             else {
-                if (key.equals("Content-Encoding")){
-                    if (value.toString().equals("[gzip]")){
-                        System.out.println("网页采用了gzip压缩!");
-                    }
-                }
-                System.out.println(key + ":" + value.toString());
+                return "http://" + sUrl;
             }
+        }else {
+            return sUrl;
         }
-        System.out.println();
-    }
-
-    String getCharset(String contenType){
-        Pattern pattern = Pattern.compile("charset=.*");
-        Matcher matcher = pattern.matcher(contenType);
-        if (matcher.find())
-            return matcher.group(0).split("charset=")[1];
-        return "utf-8";
     }
 }
