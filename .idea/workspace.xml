@@ -1,16 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="b3877f73-e2e0-47ac-b404-5a642f90b553" name="Default" comment="">
-      <change type="NEW" beforePath="" afterPath="$PROJECT_DIR$/src/wxy/Utils/CBloomFilter.java" />
-      <change type="NEW" beforePath="" afterPath="$PROJECT_DIR$/src/wxy/Utils/UrlInfo.java" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/out/production/Crawler/wxy/MyCrawler$ThreadGetPages.class" afterPath="$PROJECT_DIR$/out/production/Crawler/wxy/MyCrawler$ThreadGetPages.class" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/out/production/Crawler/wxy/MyCrawler$ThreadParsePages.class" afterPath="$PROJECT_DIR$/out/production/Crawler/wxy/MyCrawler$ThreadParsePages.class" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/out/production/Crawler/wxy/MyCrawler.class" afterPath="$PROJECT_DIR$/out/production/Crawler/wxy/MyCrawler.class" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/.idea/workspace.xml" afterPath="$PROJECT_DIR$/.idea/workspace.xml" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/src/wxy/MyCrawler.java" afterPath="$PROJECT_DIR$/src/wxy/MyCrawler.java" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/src/wxy/Utils/PageInfo.java" afterPath="$PROJECT_DIR$/src/wxy/Utils/PageInfo.java" />
-    </list>
+    <list default="true" id="b3877f73-e2e0-47ac-b404-5a642f90b553" name="Default" comment="" />
     <ignored path="Crawler.iws" />
     <ignored path=".idea/workspace.xml" />
     <ignored path="$PROJECT_DIR$/out/" />
@@ -243,7 +234,7 @@
     <property name="aspect.path.notification.shown" value="true" />
     <property name="WebServerToolWindowFactoryState" value="false" />
     <property name="js-jscs-nodeInterpreter" value="/usr/local/bin/node" />
-    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
+    <property name="last_opened_file_path" value="$USER_HOME$/Desktop/MyCrawler-threadCombine" />
   </component>
   <component name="RecentsManager">
     <key name="CopyClassDialog.RECENTS_KEY">
@@ -822,12 +813,12 @@
       <workItem from="1469475195389" duration="771000" />
       <workItem from="1469786961366" duration="832000" />
       <workItem from="1470930532728" duration="892000" />
-      <workItem from="1471583986841" duration="146000" />
+      <workItem from="1471583986841" duration="601000" />
     </task>
     <servers />
   </component>
   <component name="TimeTrackingManager">
-    <option name="totallyTimeSpent" value="67865000" />
+    <option name="totallyTimeSpent" value="68320000" />
   </component>
   <component name="TodoView">
     <todo-panel id="selected-file">
